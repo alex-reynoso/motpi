@@ -1,0 +1,16 @@
+services:
+  postgres: 
+    image: postgres:17-alpine
+    container_name: motpi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: motpi_user
+      POSTGRES_PASSWORD: motpi_dev_password
+      POSTGRES_DB: motpi_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - motpi_data:/var/lib/postgresql/data
+
+volumes:
+  motpi_data:

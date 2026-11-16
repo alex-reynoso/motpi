@@ -1,6 +1,7 @@
-import { IsUUID } from 'class-validator';
+
+import { IsJWT } from 'class-validator';
 
 export class ConsumeTokenDto {
-  @IsUUID('4')
-  jti: string;
+  @IsJWT()
+  token: string;
 }

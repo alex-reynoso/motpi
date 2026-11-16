@@ -3,6 +3,7 @@ import {
   Accion,
   CondicionAcademica,
   EvaluateAccessDto,
+  EvaluateMultipleAccessDto,
   TipoRecurso,
 } from './dto/evaluate-access.dto';
 
@@ -39,10 +40,6 @@ export class EngineService {
 
   /**
    * Asociación entre tipo de equipo y materia académica.
-   *
-   * Esta tabla representa una política institucional simplificada.
-   * En una implementación futura podría externalizarse a una
-   * base de datos o a un Policy Decision Point.
    */
   private readonly recursoMateria: Record<TipoRecurso, string[]> = {
     [TipoRecurso.OSCILOSCOPIO]: ['Sistemas Electrónicos', 'Circuitos'],
@@ -55,10 +52,7 @@ export class EngineService {
   };
 
   evaluate(dto: EvaluateAccessDto): EvaluationResult {
-    // --------------------------------------------------------------
-    // Validación conceptual de la acción.
-    // --------------------------------------------------------------
-
+    // Validación de la acción.
     if (dto.accion !== Accion.PRESTAMO) {
       return {
         decision: 'DENEGADO',
@@ -66,30 +60,15 @@ export class EngineService {
       };
     }
 
-    // --------------------------------------------------------------
-    // REGLA 1
-    // Condición académica.
-    // --------------------------------------------------------------
-
-    if (
-      dto.sujeto.condicionAcademica !== CondicionAcademica.REGULAR
-    ) {
+    // REGLA 1: Condición académica.
+    if (dto.sujeto.condicionAcademica !== CondicionAcademica.REGULAR) {
       return {
         decision: 'DENEGADO',
-        justificacion:
-          'Condición académica irregular detectada.',
+        justificacion: 'Condición académica irregular detectada.',
       };
     }
 
-    // --------------------------------------------------------------
-    // REGLA 2
-    // Horario del laboratorio.
-    //
-    // Se interpreta el intervalo como:
-    //
-    // 08:00 <= hora <= 18:00
-    // --------------------------------------------------------------
-
+    // REGLA 2: Horario del laboratorio.
     const minutosSolicitud = this.convertirHoraAMinutos(
       dto.contexto.horaSolicitud,
     );
@@ -108,20 +87,15 @@ export class EngineService {
       };
     }
 
-    // --------------------------------------------------------------
-    // REGLA 3
-    // Materia asociada al recurso.
-    // --------------------------------------------------------------
-
+    // REGLA 3: Materia asociada al recurso.
     const materiasPermitidas =
       this.recursoMateria[dto.recurso.tipo] ?? [];
 
-    const estaInscrito = dto.sujeto.materiasInscritas.some(
-      (materia) =>
-        materiasPermitidas.some(
-          (permitida) =>
-            permitida.toLowerCase() === materia.toLowerCase(),
-        ),
+    const estaInscrito = dto.sujeto.materiasInscritas.some((materia) =>
+      materiasPermitidas.some(
+        (permitida) =>
+          permitida.toLowerCase() === materia.toLowerCase(),
+      ),
     );
 
     if (!estaInscrito) {
@@ -132,12 +106,7 @@ export class EngineService {
       };
     }
 
-    // --------------------------------------------------------------
-    // Validación adicional contextual:
-    // la materia declarada en el contexto debe corresponder con
-    // una materia que el estudiante está cursando.
-    // --------------------------------------------------------------
-
+    // Validación adicional: materia actual inscrita.
     const materiaActualInscrita =
       dto.sujeto.materiasInscritas.some(
         (materia) =>
@@ -153,10 +122,7 @@ export class EngineService {
       };
     }
 
-    // --------------------------------------------------------------
     // Todas las reglas fueron satisfechas.
-    // --------------------------------------------------------------
-
     return {
       decision: 'PERMITIDO',
       justificacion:
@@ -164,9 +130,57 @@ export class EngineService {
     };
   }
 
+  evaluateMultiple(
+    dto: EvaluateMultipleAccessDto,
+  ): EvaluationResult & {
+    resultados: {
+      recursoId: string;
+      decision: Decision;
+      justificacion: string;
+    }[];
+  } {
+    const resultados = dto.recursos.map((recurso) => {
+      const resultado = this.evaluate({
+        sujeto: dto.sujeto,
+        recurso,
+        accion: dto.accion,
+        contexto: dto.contexto,
+      });
+
+      return {
+        recursoId: recurso.id,
+        decision: resultado.decision,
+        justificacion: resultado.justificacion,
+      };
+    });
+
+    const recursosDenegados = resultados.filter(
+      (resultado) => resultado.decision === 'DENEGADO',
+    );
+
+    if (recursosDenegados.length > 0) {
+      return {
+        decision: 'DENEGADO',
+        justificacion: recursosDenegados
+          .map(
+            (resultado) =>
+              `Equipo ${resultado.recursoId}: ${resultado.justificacion}`,
+          )
+          .join(' | '),
+        resultados,
+      };
+    }
+
+    return {
+      decision: 'PERMITIDO',
+      justificacion:
+        'Todos los equipos cumplen las políticas institucionales de autorización.',
+      resultados,
+    };
+  }
+
   private convertirHoraAMinutos(hora: string): number {
     const [horas, minutos] = hora.split(':').map(Number);
-
     return horas * 60 + minutos;
   }
-}
+} 

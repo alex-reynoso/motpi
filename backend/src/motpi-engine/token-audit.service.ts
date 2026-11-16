@@ -1,146 +1,140 @@
-import {
-  BadRequestException,
-  Injectable,
-} from '@nestjs/common';
+
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { DataSource, EntityManager } from 'typeorm';
+import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
 
-export type TokenStatus = 'ISSUED' | 'CONSUMED';
+import { TokenAutorizacion } from '../prestamos/entities/token-autorizacion.entity';
+import { SolicitudPrestamo } from '../prestamos/entities/solicitud-prestamo.entity';
 
-export interface TokenRecord {
+interface JwtPayloadMotpi {
+  sub: string;
   jti: string;
-  status: TokenStatus;
-  issuedAt: string;
-  consumedAt?: string;
-}
-
-export interface AuditLog {
-  id: string;
-  timestamp: string;
-  sujetoId: string;
-  recurso: string;
-  decision: 'PERMITIDO' | 'DENEGADO';
-  justificacion: string;
-  jti: string | null;
+  solicitudId: string;
+  iss: string;
+  exp: number;
 }
 
 @Injectable()
 export class TokenAuditService {
-  /**
-   * ================================================================
-   * MOTPI - Módulo de Alejandro
-   * ================================================================
-   *
-   * RESPONSABILIDAD:
-   *   - Lifecycle de tokens
-   *   - jti
-   *   - Protección contra Replay
-   *   - Auditoría
-   *
-   * NO RESPONSABILIDADES:
-   *   - Evaluar políticas
-   *   - Decidir PERMITIDO/DENEGADO
-   *
-   * El motor Hian decide.
-   * Alejandro registra y controla el uso posterior de la decisión.
-   * ================================================================
-   */
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly jwtService: JwtService,
+  ) {}
 
-  private readonly tokens = new Map<string, TokenRecord>();
-
-  private readonly auditLogs: AuditLog[] = [];
-
-  /**
-   * Emite un identificador único de uso para una decisión permitida.
-   */
-  issueToken(): string {
+  async issueToken(
+    solicitud: SolicitudPrestamo,
+    manager: EntityManager,
+  ): Promise<{ jti: string; token: string }> {
     const jti = randomUUID();
 
-    this.tokens.set(jti, {
+    const tokenRepository =
+      manager.getRepository(TokenAutorizacion);
+
+    const registro = tokenRepository.create({
       jti,
-      status: 'ISSUED',
-      issuedAt: new Date().toISOString(),
+      estado: 'ISSUED',
+      fecha_consumo: null,
+      solicitud,
     });
 
-    return jti;
+    await tokenRepository.save(registro);
+
+    const token = await this.jwtService.signAsync({
+      sub: solicitud.usuario.id_usuario,
+      jti,
+      solicitudId: solicitud.id_solicitud,
+    });
+
+    return { jti, token };
   }
 
-  /**
-   * Consume un token de forma atómica desde la perspectiva del
-   * event loop de Node.js.
-   *
-   * IMPORTANTE:
-   *
-   * No existe ningún `await` entre:
-   *
-   *   1. consultar estado
-   *   2. cambiar estado
-   *
-   * Por tanto, dos requests que entren al mismo proceso no pueden
-   * intercalarse entre estas dos operaciones síncronas.
-   */
-  consumeToken(jti: string): {
-    success: boolean;
-    jti: string;
-    status: TokenStatus;
-    consumedAt: string;
-  } {
-    const token = this.tokens.get(jti);
+  async consumeToken(tokenJwt: string) {
+    // 1. Verificar firma, emisor y expiración del JWT.
+    let payload: JwtPayloadMotpi;
 
-    if (!token || token.status !== 'ISSUED') {
+    try {
+      payload =
+        await this.jwtService.verifyAsync<JwtPayloadMotpi>(
+          tokenJwt,
+          {
+            issuer: 'MOTPI',
+            algorithms: ['HS256'],
+          },
+        );
+    } catch {
       throw new BadRequestException(
-        'Token inválido, expirado o ya reutilizado (Replay Attack Detectado)',
+        'JWT inválido, alterado o expirado.',
       );
     }
 
-    // Cambio de estado inmediato y síncrono.
-    token.status = 'CONSUMED';
-    token.consumedAt = new Date().toISOString();
+    // 2. Validar los datos necesarios del JWT.
+    if (
+      !payload.sub ||
+      !payload.jti ||
+      !payload.solicitudId
+    ) {
+      throw new BadRequestException(
+        'El JWT no contiene los datos requeridos.',
+      );
+    }
+
+    // 3. Comprobar que el JTI corresponde al usuario
+    // y a la solicitud incluidos en el JWT.
+    const tokenRepository =
+      this.dataSource.getRepository(TokenAutorizacion);
+
+    const registro = await tokenRepository.findOne({
+      where: { jti: payload.jti },
+      relations: {
+        solicitud: {
+          usuario: true,
+        },
+      },
+    });
+
+    if (
+      !registro ||
+      registro.solicitud.id_solicitud !== payload.solicitudId ||
+      registro.solicitud.usuario.id_usuario !== payload.sub
+    ) {
+      throw new BadRequestException(
+        'El JWT no corresponde a un registro de autorización válido.',
+      );
+    }
+
+    // 4. Consumir el JTI mediante una actualización atómica.
+    const resultado = await tokenRepository
+      .createQueryBuilder()
+      .update(TokenAutorizacion)
+      .set({
+        estado: 'CONSUMED',
+        fecha_consumo: () => 'CURRENT_TIMESTAMP',
+      })
+      .where('jti = :jti', { jti: payload.jti })
+      .andWhere('id_solicitud = :solicitudId', {
+        solicitudId: payload.solicitudId,
+      })
+      .andWhere('estado = :estado', {
+        estado: 'ISSUED',
+      })
+      .returning(['jti', 'estado', 'fecha_consumo'])
+      .execute();
+
+    if (resultado.affected !== 1) {
+      throw new BadRequestException(
+        'Token inválido o ya utilizado. Posible intento de Replay Attack.',
+      );
+    }
+
+    const tokenConsumido = resultado.raw[0];
 
     return {
       success: true,
-      jti,
-      status: token.status,
-      consumedAt: token.consumedAt,
+      jti: tokenConsumido.jti,
+      status: tokenConsumido.estado,
+      consumedAt: tokenConsumido.fecha_consumo,
     };
-  }
-
-  /**
-   * Registra una decisión completa.
-   */
-  logDecision(data: {
-    sujetoId: string;
-    recurso: string;
-    decision: 'PERMITIDO' | 'DENEGADO';
-    justificacion: string;
-    jti?: string | null;
-  }): AuditLog {
-    const log: AuditLog = {
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
-      sujetoId: data.sujetoId,
-      recurso: data.recurso,
-      decision: data.decision,
-      justificacion: data.justificacion,
-      jti: data.jti ?? null,
-    };
-
-    this.auditLogs.push(log);
-
-    return log;
-  }
-
-  /**
-   * Devuelve una copia para evitar que el controller pueda modificar
-   * accidentalmente el array interno.
-   */
-  getAuditLogs(): AuditLog[] {
-    return [...this.auditLogs];
-  }
-
-  /**
-   * Útil para depuración del prototipo.
-   */
-  getToken(jti: string): TokenRecord | undefined {
-    return this.tokens.get(jti);
   }
 }
+ 

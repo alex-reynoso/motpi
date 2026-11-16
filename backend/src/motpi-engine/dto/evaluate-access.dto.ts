@@ -1,5 +1,6 @@
 import {
   IsArray,
+  ArrayNotEmpty,
   IsIn,
   IsNumber,
   IsObject,
@@ -70,6 +71,25 @@ export class EvaluateAccessDto {
   @ValidateNested()
   @Type(() => RecursoDto)
   recurso: RecursoDto;
+
+  @IsIn(Object.values(Accion))
+  accion: Accion;
+
+  @ValidateNested()
+  @Type(() => ContextoDto)
+  contexto: ContextoDto;
+}
+
+export class EvaluateMultipleAccessDto {
+  @ValidateNested()
+  @Type(() => SujetoDto)
+  sujeto: SujetoDto;
+
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Type(() => RecursoDto)
+  recursos: RecursoDto[];
 
   @IsIn(Object.values(Accion))
   accion: Accion;
