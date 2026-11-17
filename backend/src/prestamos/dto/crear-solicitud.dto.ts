@@ -5,14 +5,12 @@ import {
   ArrayUnique,
   IsUUID,
   IsString,
+  IsNotEmpty,
   MaxLength,
   IsDateString,
 } from 'class-validator';
 
 export class CrearSolicitudDto {
-  @IsUUID()
-  id_usuario: string;
-
   @IsArray()
   @ArrayNotEmpty()
   @ArrayUnique()
@@ -20,6 +18,7 @@ export class CrearSolicitudDto {
   recursos: string[];
 
   @IsString()
+  @IsNotEmpty()
   @MaxLength(100)
   materiaActual: string;
 

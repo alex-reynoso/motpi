@@ -36,13 +36,13 @@ export class PrestamosService {
   ) {}
 
   // 1. Crear y evaluar una solicitud de préstamo.
-  async crearSolicitud(dto: CrearSolicitudDto) {
+  async crearSolicitud(dto: CrearSolicitudDto, idUsuario: string,) {
     const usuarioRepository =
       this.dataSource.getRepository(Usuario);
 
     const usuario = await usuarioRepository.findOne({
       where: {
-        id_usuario: dto.id_usuario,
+        id_usuario: idUsuario,
       },
       relations: {
         rol: true,

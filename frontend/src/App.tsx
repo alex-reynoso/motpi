@@ -1,4 +1,3 @@
-
 import {
   useCallback,
   useEffect,
@@ -17,6 +16,7 @@ const API_BASE = 'http://localhost:3000/api/v1'
 const API_INVENTARIO = `${API_BASE}/inventario/recursos`
 const API_SOLICITUDES = `${API_BASE}/prestamos/solicitudes`
 const API_MIS_SOLICITUDES = `${API_BASE}/prestamos/mis-solicitudes`
+const API_MIS_MATERIAS = `${API_BASE}/academico/mis-materias`
 
 // -------------------- TIPOS --------------------
 
@@ -55,6 +55,33 @@ interface Recurso {
     nombre: string
     ubicacion: string
   } | null
+}
+ 
+interface Materia {
+  id_materia: number
+  nombre: string
+  clave: string
+  periodo: string
+}
+
+interface RespuestaMaterias {
+  success: boolean
+  total: number
+  materias: Materia[]
+}
+
+interface RespuestaCrearSolicitud {
+  success: boolean
+  mensaje: string
+  solicitud: {
+    id_solicitud: string
+    estado: string
+    decision: string
+    justificacion: string
+    jti: string | null
+    token: string | null
+    prestamo: PrestamoSolicitud | null
+  }
 }
 
 interface EquipoSolicitud {
@@ -107,6 +134,31 @@ interface RespuestaSolicitudes {
 const formatearFecha = (fecha: string | null | undefined) => {
   if (!fecha) return 'No disponible'
 
+  let fechaString = fecha
+
+  // Si la fecha viene SIN zona horaria (no termina en Z y no tiene +), 
+  // le agregamos la Z para forzar a JS a interpretarla como UTC.
+  // Si ya viene con la Z (como parece ser el caso), la dejamos intacta.
+  if (!fechaString.endsWith('Z') && !fechaString.includes('+')) {
+    fechaString = `${fechaString}Z`
+  }
+
+  const fechaValida = new Date(fechaString)
+
+  if (Number.isNaN(fechaValida.getTime())) {
+    return 'Fecha no válida'
+  }
+
+  // Al no especificar timeZone, usará la zona horaria local (México)
+  return new Intl.DateTimeFormat('es-MX', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(fechaValida)
+}
+
+const formatearFechaSolicitud = (fecha: string | null | undefined) => {
+  if (!fecha) return 'No disponible'
+
   const fechaValida = new Date(fecha)
 
   if (Number.isNaN(fechaValida.getTime())) {
@@ -116,6 +168,7 @@ const formatearFecha = (fecha: string | null | undefined) => {
   return new Intl.DateTimeFormat('es-MX', {
     dateStyle: 'short',
     timeStyle: 'short',
+    timeZone: 'America/Mexico_City',
   }).format(fechaValida)
 }
 
@@ -181,6 +234,44 @@ async function consultarAPI<T>(
   return respuesta.json() as Promise<T>
 }
 
+async function enviarSolicitud<T>(
+  url: string,
+  token: string,
+  datos: unknown,
+): Promise<T> {
+  const respuesta = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(datos),
+  })
+
+  const cuerpo = await respuesta.json().catch(() => null)
+
+  if (!respuesta.ok) {
+    const mensaje = Array.isArray(cuerpo?.message)
+      ? cuerpo.message.join(', ')
+      : cuerpo?.message || `Error del servidor (${respuesta.status}).`
+    throw new Error(mensaje)
+  }
+
+  return cuerpo as T
+}
+
+const obtenerFechaHoraMinima = () => {
+  const fecha = new Date()
+  fecha.setMinutes(fecha.getMinutes() + 1)
+  const anio = fecha.getFullYear()
+  const mes = String(fecha.getMonth() + 1).padStart(2, '0')
+  const dia = String(fecha.getDate()).padStart(2, '0')
+  const horas = String(fecha.getHours()).padStart(2, '0')
+  const minutos = String(fecha.getMinutes()).padStart(2, '0')
+  return `${anio}-${mes}-${dia}T${horas}:${minutos}`
+}
+
 // -------------------- COMPONENTE --------------------
 
 function App() {
@@ -205,17 +296,35 @@ function App() {
   const [cargandoInventario, setCargandoInventario] = useState(false)
   const [errorInventario, setErrorInventario] = useState('')
 
+  // Materias y formulario de préstamo del estudiante.
+  const [materias, setMaterias] = useState<Materia[]>([])
+  const [cargandoMaterias, setCargandoMaterias] = useState(false)
+  const [errorMaterias, setErrorMaterias] = useState('')
+  const [materiaSeleccionada, setMateriaSeleccionada] = useState('')
+  const [recursosSeleccionados, setRecursosSeleccionados] = useState<string[]>([])
+  const [fechaDevolucion, setFechaDevolucion] = useState('')
+  const [enviandoSolicitud, setEnviandoSolicitud] = useState(false)
+  const [resultadoSolicitud, setResultadoSolicitud] =
+    useState<RespuestaCrearSolicitud['solicitud'] | null>(null)
+  const [errorFormulario, setErrorFormulario] = useState('')
+
   // Solicitudes.
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([])
   const [cargandoSolicitudes, setCargandoSolicitudes] = useState(false)
   const [errorSolicitudes, setErrorSolicitudes] = useState('')
+
+  // Devolución de préstamos.
+  const [devolviendoPrestamoId, setDevolviendoPrestamoId] =
+    useState<string | null>(null)
+  const [mensajeDevolucion, setMensajeDevolucion] = useState('')
+  const [errorDevolucion, setErrorDevolucion] = useState('')
 
   // -------------------- PERMISOS DE INTERFAZ --------------------
 
   const rol = usuarioSesion?.rol ?? ''
 
   const esEstudiante = rol === 'ESTUDIANTE'
-  
+
   const esAdministrador =
     rol === 'ADMINISTRADOR_SISTEMA'
 
@@ -224,6 +333,9 @@ function App() {
 
   const esEncargado =
     rol === 'ENCARGADO_LABORATORIO'
+
+  // Solo administración puede modificar el tema institucional.
+  const puedeCambiarTema = esAdministrador || esAdministrativo
 
   const puedeConsultarSolicitudes =
     esEstudiante ||
@@ -247,6 +359,13 @@ function App() {
     setSolicitudes([])
     setErrorInventario('')
     setErrorSolicitudes('')
+    setMaterias([])
+    setMateriaSeleccionada('')
+    setRecursosSeleccionados([])
+    setResultadoSolicitud(null)
+    setErrorFormulario('')
+    setMensajeDevolucion('')
+    setErrorDevolucion('')
   }
 
   const cerrarSesion = () => {
@@ -258,6 +377,14 @@ function App() {
 
     setErrorInventario('')
     setErrorSolicitudes('')
+    setMaterias([])
+    setMateriaSeleccionada('')
+    setRecursosSeleccionados([])
+    setResultadoSolicitud(null)
+    setErrorFormulario('')
+    setMensajeDevolucion('')
+    setErrorDevolucion('')
+    setDevolviendoPrestamoId(null)
 
     setCargandoInventario(false)
     setCargandoSolicitudes(false)
@@ -292,6 +419,46 @@ function App() {
       setCargandoInventario(false)
     }
   }, [tokenSesion])
+
+  // -------------------- CONSULTA DE MATERIAS --------------------
+
+  const cargarMaterias = useCallback(async () => {
+    if (!tokenSesion || !esEstudiante) {
+      setMaterias([])
+      return
+    }
+
+    setCargandoMaterias(true)
+    setErrorMaterias('')
+
+    try {
+      const datos = await consultarAPI<RespuestaMaterias>(
+        API_MIS_MATERIAS,
+        tokenSesion,
+      )
+
+      if (!datos.success || !Array.isArray(datos.materias)) {
+        throw new Error('La respuesta de materias no es válida.')
+      }
+
+      setMaterias(datos.materias)
+      setMateriaSeleccionada((actual) =>
+        datos.materias.some((materia) => String(materia.id_materia) === actual)
+          ? actual
+          : datos.materias.length > 0
+            ? String(datos.materias[0].id_materia)
+            : '',
+      )
+    } catch (error) {
+      setErrorMaterias(
+        error instanceof Error
+          ? error.message
+          : 'No fue posible consultar tus materias.',
+      )
+    } finally {
+      setCargandoMaterias(false)
+    }
+  }, [tokenSesion, esEstudiante])
 
   // -------------------- CONSULTA DE SOLICITUDES --------------------
 
@@ -339,6 +506,56 @@ function App() {
     esEstudiante,
   ])
 
+  // -------------------- DEVOLUCIÓN DE PRÉSTAMOS --------------------
+
+  const registrarDevolucion = async (idPrestamo: string) => {
+    if (!tokenSesion || devolviendoPrestamoId) return
+
+    const confirmar = window.confirm(
+      '¿Confirmas que deseas registrar la devolución de este préstamo?',
+    )
+
+    if (!confirmar) return
+
+    setDevolviendoPrestamoId(idPrestamo)
+    setMensajeDevolucion('')
+    setErrorDevolucion('')
+
+    try {
+      const respuesta = await enviarSolicitud<{
+        success?: boolean
+        mensaje?: string
+      }>(
+        `${API_BASE}/prestamos/${idPrestamo}/devolucion`,
+        tokenSesion,
+        {},
+      )
+
+      if (respuesta?.success === false) {
+        throw new Error(
+          respuesta.mensaje || 'No fue posible registrar la devolución.',
+        )
+      }
+
+      setMensajeDevolucion(
+        respuesta?.mensaje || 'Devolución registrada correctamente.',
+      )
+
+      await Promise.all([
+        cargarSolicitudes(),
+        cargarInventario(),
+      ])
+    } catch (error) {
+      setErrorDevolucion(
+        error instanceof Error
+          ? error.message
+          : 'Ocurrió un error al registrar la devolución.',
+      )
+    } finally {
+      setDevolviendoPrestamoId(null)
+    }
+  }
+
   // -------------------- CARGA INICIAL --------------------
 
   useEffect(() => {
@@ -346,18 +563,105 @@ function App() {
 
     void cargarInventario()
     void cargarSolicitudes()
+
+    if (usuarioSesion.rol === 'ESTUDIANTE') {
+      void cargarMaterias()
+    } else {
+      setMaterias([])
+    }
   }, [
     tokenSesion,
     usuarioSesion,
     cargarInventario,
     cargarSolicitudes,
+    cargarMaterias,
   ])
+
+  const alternarRecurso = (idRecurso: string) => {
+    setRecursosSeleccionados((actuales) =>
+      actuales.includes(idRecurso)
+        ? actuales.filter((id) => id !== idRecurso)
+        : [...actuales, idRecurso],
+    )
+    setResultadoSolicitud(null)
+    setErrorFormulario('')
+  }
+
+  const enviarFormularioSolicitud = async () => {
+    if (!tokenSesion) return
+
+    const materia = materias.find(
+      (item) => String(item.id_materia) === materiaSeleccionada,
+    )
+
+    if (!materia) {
+      setErrorFormulario('Selecciona una materia inscrita.')
+      return
+    }
+
+    if (recursosSeleccionados.length === 0) {
+      setErrorFormulario('Selecciona al menos un equipo.')
+      return
+    }
+
+    const fechaDevolucionLocal = new Date(fechaDevolucion)
+
+    if (
+      !fechaDevolucion ||
+      Number.isNaN(fechaDevolucionLocal.getTime()) ||
+      fechaDevolucionLocal.getTime() <= Date.now()
+    ) {
+      setErrorFormulario(
+        'Selecciona una fecha y hora de devolución posteriores al momento actual.',
+      )
+      return
+    }
+
+    setEnviandoSolicitud(true)
+    setErrorFormulario('')
+    setResultadoSolicitud(null)
+
+    try {
+      const respuesta = await enviarSolicitud<RespuestaCrearSolicitud>(
+        API_SOLICITUDES,
+        tokenSesion,
+        {
+          recursos: recursosSeleccionados,
+          materiaActual: materia.nombre,
+          fechaDevolucionPrevista: fechaDevolucionLocal.toISOString(),
+        },
+      )
+
+      if (!respuesta.success || !respuesta.solicitud) {
+        throw new Error(
+          respuesta.mensaje || 'No fue posible registrar la solicitud.',
+        )
+      }
+
+      setResultadoSolicitud(respuesta.solicitud)
+      setRecursosSeleccionados([])
+
+      await Promise.all([
+        cargarInventario(),
+        cargarSolicitudes(),
+      ])
+    } catch (error) {
+      setErrorFormulario(
+        error instanceof Error
+          ? error.message
+          : 'Ocurrió un error al enviar la solicitud.',
+      )
+    } finally {
+      setEnviandoSolicitud(false)
+    }
+  }
 
   // Actualizar información.
   const actualizarDashboard = () => {
     void Promise.all([
       cargarInventario(),
       cargarSolicitudes(),
+      ...(esEstudiante ? [cargarMaterias()] : []),
     ])
   }
 
@@ -481,6 +785,13 @@ function App() {
             <span>Dashboard</span>
           </a>
 
+          {esEstudiante && (
+            <a href="#nueva-solicitud">
+              <span className="nav-icon">＋</span>
+              <span>Nueva solicitud</span>
+            </a>
+          )}
+
           {puedeConsultarSolicitudes && (
             <a href="#solicitudes">
               <span className="nav-icon">▣</span>
@@ -562,11 +873,13 @@ function App() {
               onClick={actualizarDashboard}
               disabled={
                 cargandoInventario ||
-                (puedeConsultarSolicitudes && cargandoSolicitudes)
+                (puedeConsultarSolicitudes && cargandoSolicitudes) ||
+                (esEstudiante && cargandoMaterias)
               }
             >
               {cargandoInventario ||
-              (puedeConsultarSolicitudes && cargandoSolicitudes)
+              (puedeConsultarSolicitudes && cargandoSolicitudes) ||
+              (esEstudiante && cargandoMaterias)
                 ? 'Actualizando...'
                 : 'Actualizar datos'}
             </button>
@@ -604,114 +917,126 @@ function App() {
           </div>
         </section>
 
-        {/* PERSONALIZACIÓN */}
-        <section className="settings-grid">
-          <article className="settings-card">
-            <div className="settings-heading">
-              <div>
-                <h3>Identidad visual</h3>
-                <p>Personaliza los colores institucionales.</p>
-              </div>
-              <span className="settings-icon">◈</span>
-            </div>
-
-            <label htmlFor="theme-selector">
-              Tema institucional
-            </label>
-
-            <select
-              id="theme-selector"
-              value={temaSeleccionado}
-              onChange={(event) =>
-                setTemaSeleccionado(event.target.value as Tema)
-              }
-            >
-              {Object.entries(temas).map(([clave, valor]) => (
-                <option key={clave} value={clave}>
-                  {valor.nombre}
-                </option>
-              ))}
-            </select>
-
-            <div className="theme-preview">
-              <div>
-                <span style={{ background: tema.primary }} />
-                <small>Principal</small>
+        {puedeCambiarTema && (
+          <>
+          {/* PERSONALIZACIÓN */}
+          <section className="settings-grid">
+            <article className="settings-card">
+              <div className="settings-heading">
+                <div>
+                  <h3>Identidad visual</h3>
+                  <p>Personaliza los colores institucionales.</p>
+                </div>
+                <span className="settings-icon">◈</span>
               </div>
 
-              <div>
-                <span style={{ background: tema.secondary }} />
-                <small>Secundario</small>
+              {puedeCambiarTema ? (
+                <>
+                  <label htmlFor="theme-selector">
+                    Tema institucional
+                  </label>
+
+                  <select
+                    id="theme-selector"
+                    value={temaSeleccionado}
+                    onChange={(event) =>
+                      setTemaSeleccionado(event.target.value as Tema)
+                    }
+                  >
+                    {Object.entries(temas).map(([clave, valor]) => (
+                      <option key={clave} value={clave}>
+                        {valor.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <p className="settings-permission-message">
+                  Solo los usuarios con rol Administrador del sistema o
+                  Administrativo pueden cambiar los colores del sitio.
+                </p>
+              )}
+
+              <div className="theme-preview">
+                <div>
+                  <span style={{ background: tema.primary }} />
+                  <small>Principal</small>
+                </div>
+
+                <div>
+                  <span style={{ background: tema.secondary }} />
+                  <small>Secundario</small>
+                </div>
+
+                <div>
+                  <span style={{ background: tema.accent }} />
+                  <small>Acento</small>
+                </div>
+              </div>
+            </article>
+
+            <article className="settings-card">
+              <div className="settings-heading">
+                <div>
+                  <h3>Datos institucionales</h3>
+                  <p>Configura el nombre y logotipo.</p>
+                </div>
+                <span className="settings-icon">⌂</span>
               </div>
 
-              <div>
-                <span style={{ background: tema.accent }} />
-                <small>Acento</small>
+              <label htmlFor="institution-name">
+                Nombre de la institución
+              </label>
+
+              <input
+                id="institution-name"
+                type="text"
+                value={nombreInstitucion}
+                onChange={(event) =>
+                  setNombreInstitucion(event.target.value)
+                }
+                placeholder="Nombre de la institución"
+                maxLength={100}
+              />
+
+              <label htmlFor="institution-logo">
+                Logotipo institucional
+              </label>
+
+              <input
+                id="institution-logo"
+                type="file"
+                accept=".png,.jpg,.jpeg,.webp,.svg"
+                onChange={manejarLogo}
+              />
+
+              {errorLogo && (
+                <p className="error-message">{errorLogo}</p>
+              )}
+
+              <div className="institution-preview">
+                <div className="institution-logo">
+                  {logoInstitucion ? (
+                    <img
+                      src={logoInstitucion}
+                      alt="Vista previa del logotipo"
+                    />
+                  ) : (
+                    <span>LOGO</span>
+                  )}
+                </div>
+
+                <div>
+                  <strong>
+                    {nombreInstitucion || 'Institución educativa'}
+                  </strong>
+                  <small>Identidad institucional</small>
+                </div>
               </div>
-            </div>
-          </article>
-
-          <article className="settings-card">
-            <div className="settings-heading">
-              <div>
-                <h3>Datos institucionales</h3>
-                <p>Configura el nombre y logotipo.</p>
-              </div>
-              <span className="settings-icon">⌂</span>
-            </div>
-
-            <label htmlFor="institution-name">
-              Nombre de la institución
-            </label>
-
-            <input
-              id="institution-name"
-              type="text"
-              value={nombreInstitucion}
-              onChange={(event) =>
-                setNombreInstitucion(event.target.value)
-              }
-              placeholder="Nombre de la institución"
-              maxLength={100}
-            />
-
-            <label htmlFor="institution-logo">
-              Logotipo institucional
-            </label>
-
-            <input
-              id="institution-logo"
-              type="file"
-              accept=".png,.jpg,.jpeg,.webp,.svg"
-              onChange={manejarLogo}
-            />
-
-            {errorLogo && (
-              <p className="error-message">{errorLogo}</p>
-            )}
-
-            <div className="institution-preview">
-              <div className="institution-logo">
-                {logoInstitucion ? (
-                  <img
-                    src={logoInstitucion}
-                    alt="Vista previa del logotipo"
-                  />
-                ) : (
-                  <span>LOGO</span>
-                )}
-              </div>
-
-              <div>
-                <strong>
-                  {nombreInstitucion || 'Institución educativa'}
-                </strong>
-                <small>Identidad institucional</small>
-              </div>
-            </div>
-          </article>
-        </section>
-
+            </article>
+          </section>
+                  </>
+        )}
         {/* ESTADÍSTICAS */}
         <section className="stats">
           {puedeConsultarSolicitudes && (
@@ -777,6 +1102,211 @@ function App() {
               </strong>
               <small>Inventario institucional</small>
             </article>
+          </section>
+        )}
+
+        {/* FORMULARIO DE SOLICITUD */}
+        {esEstudiante && (
+          <section className="content-card" id="nueva-solicitud">
+            <div className="section-heading">
+              <div>
+                <h3>Nueva solicitud de préstamo</h3>
+                <p>
+                  Selecciona la materia, los equipos y la fecha prevista
+                  de devolución. MOTPI evaluará tu solicitud.
+                </p>
+              </div>
+            </div>
+
+            {errorMaterias && (
+              <div className="inventory-error">
+                <p>{errorMaterias}</p>
+                <button
+                  type="button"
+                  onClick={() => void cargarMaterias()}
+                >
+                  Reintentar
+                </button>
+              </div>
+            )}
+
+            {cargandoMaterias ? (
+              <p className="inventory-message">
+                Consultando materias inscritas...
+              </p>
+            ) : materias.length === 0 ? (
+              <p className="inventory-message">
+                No tienes materias inscritas activas para realizar
+                una solicitud.
+              </p>
+            ) : (
+              <div className="loan-form">
+                <div className="form-group">
+                  <label htmlFor="materia-solicitud">
+                    Materia inscrita
+                  </label>
+
+                  <select
+                    id="materia-solicitud"
+                    value={materiaSeleccionada}
+                    onChange={(event) => {
+                      setMateriaSeleccionada(event.target.value)
+                      setResultadoSolicitud(null)
+                      setErrorFormulario('')
+                    }}
+                    disabled={enviandoSolicitud}
+                  >
+                    <option value="">Selecciona una materia</option>
+                    {materias.map((materia) => (
+                      <option
+                        key={materia.id_materia}
+                        value={materia.id_materia}
+                      >
+                        {materia.nombre} ({materia.clave})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="fecha-devolucion">
+                    Fecha y hora prevista de devolución
+                  </label>
+
+                  <input
+                    id="fecha-devolucion"
+                    type="datetime-local"
+                    min={obtenerFechaHoraMinima()}
+                    value={fechaDevolucion}
+                    onChange={(event) => {
+                      setFechaDevolucion(event.target.value)
+                      setResultadoSolicitud(null)
+                      setErrorFormulario('')
+                    }}
+                    disabled={enviandoSolicitud}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Selecciona los equipos</label>
+                  <p className="form-hint">
+                    Puedes seleccionar varios equipos. La autorización
+                    se evaluará para el conjunto de recursos.
+                  </p>
+                </div>
+
+                {cargandoInventario ? (
+                  <p className="inventory-message">
+                    Consultando equipos disponibles...
+                  </p>
+                ) : recursos.filter(
+                    (recurso) => recurso.estado === 'DISPONIBLE',
+                  ).length === 0 ? (
+                  <p className="inventory-message">
+                    No hay equipos disponibles actualmente.
+                  </p>
+                ) : (
+                  <div className="request-resources">
+                    {recursos
+                      .filter(
+                        (recurso) => recurso.estado === 'DISPONIBLE',
+                      )
+                      .map((recurso) => (
+                        <label
+                          className={`request-resource ${
+                            recursosSeleccionados.includes(
+                              recurso.id_recurso,
+                            )
+                              ? 'selected'
+                              : ''
+                          }`}
+                          key={recurso.id_recurso}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={recursosSeleccionados.includes(
+                              recurso.id_recurso,
+                            )}
+                            onChange={() =>
+                              alternarRecurso(recurso.id_recurso)
+                            }
+                            disabled={enviandoSolicitud}
+                          />
+
+                          <span>
+                            <strong>{recurso.nombre}</strong>
+                            <small>
+                              {recurso.tipo} · Serie:{' '}
+                              {recurso.numero_serie || 'No asignada'}
+                            </small>
+                          </span>
+
+                          <span className="resource-status available">
+                            Disponible
+                          </span>
+                        </label>
+                      ))}
+                  </div>
+                )}
+
+                <div className="request-summary">
+                  <strong>
+                    Equipos seleccionados: {recursosSeleccionados.length}
+                  </strong>
+                </div>
+
+                {errorFormulario && (
+                  <div className="inventory-error">
+                    <p>{errorFormulario}</p>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => void enviarFormularioSolicitud()}
+                  disabled={
+                    enviandoSolicitud ||
+                    cargandoInventario ||
+                    cargandoMaterias ||
+                    materias.length === 0
+                  }
+                >
+                  {enviandoSolicitud
+                    ? 'Evaluando solicitud...'
+                    : 'Enviar solicitud a MOTPI'}
+                </button>
+
+                {/* RESULTADO DE LA EVALUACIÓN */}
+                {resultadoSolicitud && (
+                  <div
+                    className={`decision-result ${
+                      obtenerClaseEstado(resultadoSolicitud.decision)
+                    }`}
+                  >
+                    <h4>
+                      Resultado de MOTPI:{' '}
+                      {resultadoSolicitud.decision}
+                    </h4>
+
+                    <p>
+                      {resultadoSolicitud.justificacion}
+                    </p>
+
+                    <small>
+                      Solicitud: {resultadoSolicitud.id_solicitud}
+                    </small>
+
+                    {resultadoSolicitud.prestamo && (
+                      <p>
+                        Préstamo registrado correctamente. Estado:{' '}
+                        {resultadoSolicitud.prestamo.estado}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </section>
         )}
 
@@ -887,8 +1417,7 @@ function App() {
               </div>
             )}
         </section>
-
-        {/* SOLICITUDES */}
+                {/* SOLICITUDES */}
         {puedeConsultarSolicitudes && (
           <section className="content-card" id="solicitudes">
             <div className="section-heading">
@@ -980,11 +1509,11 @@ function App() {
                           </td>
 
                           <td>
-                            {formatearFecha(
-                              solicitud.fecha_solicitud,
+                            {formatearFechaSolicitud(
+                              solicitud.fecha_solicitud
                             )}
                           </td>
-
+ 
                           <td>
                             {solicitud.decision ? (
                               <div>
@@ -1035,8 +1564,20 @@ function App() {
               </div>
             </div>
 
-            {solicitudes.filter((solicitud) => solicitud.prestamo).length ===
-            0 ? (
+            {mensajeDevolucion && (
+              <div className="decision-result autorizada" role="status">
+                <p>{mensajeDevolucion}</p>
+              </div>
+            )}
+
+            {errorDevolucion && (
+              <div className="inventory-error" role="alert">
+                <p>{errorDevolucion}</p>
+              </div>
+            )}
+
+            {solicitudes.filter((solicitud) => solicitud.prestamo)
+              .length === 0 ? (
               <p className="inventory-message">
                 No hay préstamos registrados.
               </p>
@@ -1050,6 +1591,7 @@ function App() {
                       <th>Entrega</th>
                       <th>Devolución prevista</th>
                       <th>Estado</th>
+                      <th>Acción</th>
                     </tr>
                   </thead>
 
@@ -1092,6 +1634,30 @@ function App() {
                             >
                               {solicitud.prestamo.estado}
                             </span>
+                          </td>
+
+                          <td>
+                            {solicitud.prestamo.estado === 'ACTIVO' ? (
+                              <button
+                                type="button"
+                                className="primary-button"
+                                onClick={() =>
+                                  void registrarDevolucion(
+                                    solicitud.prestamo.id_prestamo,
+                                  )
+                                }
+                                disabled={devolviendoPrestamoId !== null}
+                              >
+                                {devolviendoPrestamoId ===
+                                solicitud.prestamo.id_prestamo
+                                  ? 'Registrando...'
+                                  : 'Registrar devolución'}
+                              </button>
+                            ) : (
+                              <span className="status devuelto">
+                                Sin acciones
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))}

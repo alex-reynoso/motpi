@@ -970,3 +970,203 @@ footer {
     padding: 28px 22px;
   }
 }
+
+
+/* =========================================
+   FORMULARIO DE SOLICITUD DE PRÉSTAMO
+   ========================================= */
+
+#nueva-solicitud {
+  margin-top: 25px;
+}
+
+.loan-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.form-group label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.form-group select,
+.form-group input[type="date"] {
+  width: 100%;
+  max-width: 450px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.form-group select:focus,
+.form-group input:focus {
+  outline: 2px solid var(--institution-accent);
+  border-color: var(--institution-primary);
+}
+
+.form-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Selección de equipos */
+
+.request-resources {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.request-resource {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  min-width: 0;
+}
+
+.request-resource:hover {
+  border-color: var(--institution-secondary);
+  background: #fffaf5;
+}
+
+.request-resource.selected {
+  border-color: var(--institution-primary);
+  background: #f0f5fb;
+}
+
+.request-resource input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  accent-color: var(--institution-primary);
+  cursor: pointer;
+}
+
+.request-resource > span:nth-of-type(1) {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.request-resource strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.request-resource small {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.request-summary {
+  padding: 13px 16px;
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+/* Botón de envío */
+
+.primary-button {
+  align-self: flex-start;
+  padding: 12px 20px;
+  border: none;
+  border-radius: 7px;
+  background: var(--institution-primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.primary-button:hover {
+  background: var(--institution-secondary);
+}
+
+.primary-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Resultado de evaluación MOTPI */
+
+.decision-result {
+  padding: 18px;
+  border-radius: 9px;
+  border: 1px solid var(--border-color);
+  line-height: 1.6;
+}
+
+.decision-result.autorizada {
+  background: #e0f5eb;
+  border-color: #a8dfc2;
+  color: #126b47;
+}
+
+.decision-result.denegada {
+  background: #fde8e8;
+  border-color: #f2bcbc;
+  color: #a52f2f;
+}
+
+.decision-result h4 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.decision-result p {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.decision-result small {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* Responsive */
+
+@media (max-width: 750px) {
+  .request-resources {
+    grid-template-columns: 1fr;
+  }
+
+  .request-resource {
+    flex-wrap: wrap;
+  }
+
+  .form-group select,
+  .form-group input[type="date"] {
+    max-width: 100%;
+  }
+
+  .primary-button {
+    width: 100%;
+  }
+}

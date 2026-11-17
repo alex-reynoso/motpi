@@ -129,7 +129,7 @@ export class EngineService {
         'Solicitud autorizada: El sujeto cumple con la materia, horario y condición académica requerida.',
     };
   }
-
+ 
   evaluateMultiple(
     dto: EvaluateMultipleAccessDto,
   ): EvaluationResult & {

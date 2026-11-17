@@ -14,9 +14,12 @@ export class SolicitudPrestamo {
   @PrimaryGeneratedColumn('uuid', { name: 'id_solicitud' })
   id_solicitud: string;
 
-  @CreateDateColumn({ name: 'fecha_solicitud' })
+  @CreateDateColumn({
+    name: 'fecha_solicitud',
+    type: 'timestamptz',
+  })
   fecha_solicitud: Date;
-
+ 
   @Column({
     type: 'varchar',
     length: 20,

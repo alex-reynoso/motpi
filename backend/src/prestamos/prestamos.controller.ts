@@ -49,10 +49,10 @@ export class PrestamosController {
     @Body() dto: CrearSolicitudDto,
     @Req() req: SessionRequest,
   ) {
-    return this.prestamosService.crearSolicitud({
-      ...dto,
-      id_usuario: req.user!.sub,
-    });
+    return this.prestamosService.crearSolicitud(
+      dto,
+      req.user!.sub,
+    );
   }
 
   // Devolver préstamo: encargado o administrador.
@@ -65,5 +65,5 @@ export class PrestamosController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.prestamosService.devolverPrestamo(id);
-  }
+  } 
 }
